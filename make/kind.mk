@@ -75,7 +75,7 @@ kind.build.%: ## Build specific component, (controller, api, ui)
 			$(MAKE) docker.build.openchoreo-api TAG=$(OPENCHOREO_IMAGE_TAG); \
 			;; \
 		ui) \
-			docker build -f $(PROJECT_DIR)/ui/packages/backend/Dockerfile -t $(UI_IMAGE) $(PROJECT_DIR)/ui; \
+			$(MAKE) docker.build.openchoreo-ui TAG=$(OPENCHOREO_IMAGE_TAG); \
 			;; \
 	esac
 	@$(call log_success, $* component built!)

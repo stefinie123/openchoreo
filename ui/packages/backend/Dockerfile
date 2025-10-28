@@ -16,6 +16,9 @@ RUN find packages \! -name "package.json" -mindepth 2 -maxdepth 2 -exec rm -rf {
 # Stage 2 - Install dependencies and build packages
 FROM node:22-bookworm-slim AS build
 
+# Get the target architecture from Docker buildx
+ARG TARGETARCH
+
 # Set Python interpreter for `node-gyp` to use
 ENV PYTHON=/usr/bin/python3
 
@@ -39,8 +42,23 @@ WORKDIR /app
 
 COPY --from=packages --chown=node:node /app .
 
+# Configure Yarn to fetch the correct architecture binaries for native modules
+# This ensures @swc/core and other native modules use prebuilt binaries instead of compiling
+# TARGETARCH is set by Docker buildx (amd64, arm64, etc.)
+RUN YARN_ARCH=$(echo ${TARGETARCH} | sed 's/amd64/x64/g' | sed 's/arm64/arm64/g') && \
+    echo "supportedArchitectures:" >> .yarnrc.yml && \
+    echo "  os:" >> .yarnrc.yml && \
+    echo "    - linux" >> .yarnrc.yml && \
+    echo "  cpu:" >> .yarnrc.yml && \
+    echo "    - ${YARN_ARCH}" >> .yarnrc.yml && \
+    echo "" >> .yarnrc.yml && \
+    echo "enableScripts: false" >> .yarnrc.yml
+
+# Install dependencies without running build scripts first (to use prebuilt binaries)
+# Then selectively run scripts for packages that need them
 RUN --mount=type=cache,target=/home/node/.cache/yarn,sharing=locked,uid=1000,gid=1000 \
-    yarn install --immutable
+    yarn install --immutable && \
+    yarn rebuild better-sqlite3 isolated-vm
 
 COPY --chown=node:node . .
 
@@ -52,6 +70,9 @@ RUN mkdir packages/backend/dist/skeleton packages/backend/dist/bundle \
 
 # Stage 3 - Build the actual backend image and install production dependencies
 FROM node:22-bookworm-slim
+
+# Get the target architecture from Docker buildx
+ARG TARGETARCH
 
 # Set Python interpreter for `node-gyp` to use
 ENV PYTHON=/usr/bin/python3
@@ -91,8 +112,20 @@ COPY --from=build --chown=node:node /app/yarn.lock /app/package.json /app/packag
 # plugins that define a `bin` export, the bin files need to be copied as well to
 # be linked in node_modules/.bin during yarn install.
 
+# Configure Yarn architecture again for production dependencies
+RUN YARN_ARCH=$(echo ${TARGETARCH} | sed 's/amd64/x64/g' | sed 's/arm64/arm64/g') && \
+    echo "supportedArchitectures:" >> .yarnrc.yml && \
+    echo "  os:" >> .yarnrc.yml && \
+    echo "    - linux" >> .yarnrc.yml && \
+    echo "  cpu:" >> .yarnrc.yml && \
+    echo "    - ${YARN_ARCH}" >> .yarnrc.yml && \
+    echo "" >> .yarnrc.yml && \
+    echo "enableScripts: false" >> .yarnrc.yml
+
 RUN --mount=type=cache,target=/home/node/.cache/yarn,sharing=locked,uid=1000,gid=1000 \
-    yarn workspaces focus --all --production && rm -rf "$(yarn cache clean)"
+    yarn workspaces focus --all --production && \
+    yarn rebuild better-sqlite3 isolated-vm && \
+    rm -rf "$(yarn cache clean)"
 
 # Copy the built packages from the build stage
 COPY --from=build --chown=node:node /app/packages/backend/dist/bundle/ ./
