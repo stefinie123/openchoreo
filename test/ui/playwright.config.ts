@@ -12,10 +12,77 @@ import { hostResolverRules } from './fixtures/hosts';
 // installed and the Thunder storage-state globalSetup would be skipped.
 const extIdpMode = process.env.E2E_WITH_EXT_IDP === 'true';
 
+// Shared Chromium launch config. Mapped hostnames resolve via
+// --host-resolver-rules so the suite needs no /etc/hosts edits.
+const chromium = {
+  ...devices['Desktop Chrome'],
+  viewport: { width: 1920, height: 1080 },
+  deviceScaleFactor: 2,
+  launchOptions: {
+    args: [`--host-resolver-rules=${hostResolverRules}`],
+    ...(process.env.PWSLOWMO && { slowMo: Number(process.env.PWSLOWMO) }),
+  },
+};
+
+// The catalog-sync spec proves the PERIODIC full-sync path, which needs the
+// opposite cluster config from the rest of the suite (events OFF + a fast 60s
+// poll, vs. the suite default of events ON + a 600s poll). Rather than a
+// second cluster, we reconfigure in place mid-run using Playwright project
+// dependencies to force the order:
+//
+//   ui  ->  poll-mode-setup  ->  catalog-sync
+//                 └── teardown: restore-event-mode
+//
+//   1. `ui` runs the whole event-driven suite (everything except catalog-sync).
+//   2. `poll-mode-setup` (runs only after `ui`) flips Backstage to poll-only
+//      mode via kubectl and waits for the pod to restart.
+//   3. `catalog-sync` (runs only after the reconfigure) exercises the poll.
+//   4. `restore-event-mode` teardown flips the config back so a local re-run
+//      against the same cluster starts clean again.
+//
+// In ext-idp mode none of this applies — only the external-idp suite runs.
+const projects = extIdpMode
+  ? [
+      {
+        name: 'chromium',
+        use: chromium,
+        testMatch: ['**/external-idp/**/*.spec.ts'],
+      },
+    ]
+  : [
+      {
+        name: 'ui',
+        use: chromium,
+        testMatch: ['**/*.spec.ts'],
+        testIgnore: [
+          '**/external-idp/**',
+          '**/catalog/catalog-sync.spec.ts',
+          '**/*.setup.ts',
+          '**/*.teardown.ts',
+        ],
+      },
+      {
+        name: 'poll-mode-setup',
+        use: chromium,
+        testMatch: ['**/catalog/reconfigure-poll-mode.setup.ts'],
+        dependencies: ['ui'],
+        teardown: 'restore-event-mode',
+      },
+      {
+        name: 'catalog-sync',
+        use: chromium,
+        testMatch: ['**/catalog/catalog-sync.spec.ts'],
+        dependencies: ['poll-mode-setup'],
+      },
+      {
+        name: 'restore-event-mode',
+        use: chromium,
+        testMatch: ['**/catalog/restore-event-mode.teardown.ts'],
+      },
+    ];
+
 export default defineConfig({
   testDir: './specs',
-  testMatch: extIdpMode ? ['**/external-idp/**/*.spec.ts'] : ['**/*.spec.ts'],
-  testIgnore: extIdpMode ? [] : ['**/external-idp/**'],
   // globalSetup mints per-role storage-state files in .auth/ before any
   // worker starts — test.use({ storageState }) only resolves after the
   // files exist on disk, so this can't live in a beforeAll hook.
@@ -52,20 +119,7 @@ export default defineConfig({
   // polyfill is injected via an init script — see fixtures/auth.ts (test
   // contexts) and global-setup.ts (sign-in mint context).
 
-  projects: [
-    {
-      name: 'chromium',
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1920, height: 1080 },
-        deviceScaleFactor: 2,
-        launchOptions: {
-          args: [`--host-resolver-rules=${hostResolverRules}`],
-          ...(process.env.PWSLOWMO && { slowMo: Number(process.env.PWSLOWMO) }),
-        },
-      },
-    },
-  ],
+  projects,
 
   outputDir: '_test-results',
 });

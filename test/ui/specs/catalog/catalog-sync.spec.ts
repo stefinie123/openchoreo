@@ -59,13 +59,15 @@ test.describe('catalog-sync: kubectl-applied component appears in Backstage cata
   test('component applied via kubectl shows up after catalog refresh', async ({
     page,
   }) => {
-    // The OpenChoreo catalog provider syncs on a scheduled poll whose default
-    // frequency is 300s (catalog-backend-module-openchoreo/src/module.ts:96).
-    // A kubectl-created component only appears after the next cycle, so the
-    // poll has to span a full interval plus slack — and the test timeout must
-    // exceed the poll. Lower `openchoreo.schedule.frequency` in app-config to
-    // make this faster in a dedicated UI-test install.
-    test.setTimeout(420_000);
+    // This spec proves the PERIODIC full-sync path in isolation. It runs only
+    // after the `poll-mode-setup` project has flipped Backstage into poll-only
+    // mode — events OFF and the scheduled poll lowered to 60s (see
+    // specs/catalog/reconfigure-poll-mode.setup.ts) — so a kubectl-created
+    // component can only appear via the poll, not the event-driven delta path.
+    // Budget the poll at a couple of cycles plus catalog-stitch slack (60s
+    // frequency → typically visible within ~90s); the test timeout must exceed
+    // the poll.
+    test.setTimeout(240_000);
     kApplyYAML(seedYAML);
 
     const catalog = new CatalogTablePO(page);
@@ -76,7 +78,7 @@ test.describe('catalog-sync: kubectl-applied component appears in Backstage cata
     await catalog.gotoKind('component');
 
     // Reload on each attempt to re-query until the kubectl-created row appears
-    // — give it longer than one provider cycle (300s) plus slack.
+    // — give it a few 60s poll cycles plus slack.
     await expect
       .poll(
         async () => {
@@ -85,7 +87,7 @@ test.describe('catalog-sync: kubectl-applied component appears in Backstage cata
             .getByRole('link', { name: COMPONENT_NAME, exact: true })
             .count();
         },
-        { timeout: 360_000, intervals: [10_000, 15_000, 30_000] },
+        { timeout: 180_000, intervals: [10_000, 15_000, 20_000] },
       )
       .toBeGreaterThan(0);
 

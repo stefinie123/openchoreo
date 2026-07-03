@@ -8,9 +8,21 @@ backstage:
   http:
     hostnames:
       - openchoreo.e2e-cp.local
-  # The default 300s full-sync cycle makes catalog-dependent flows (the
-  # catalog-sync spec, the component form's project picker) ride a 5-minute
-  # wait for freshly-created resources. 60s keeps the suite snappy without
-  # meaningfully loading the test cluster.
+  # Periodic full sync is deliberately pushed out to 10 minutes so it can NOT
+  # be the thing that surfaces a freshly-created/updated/deleted resource
+  # within a test's window. With the event-forwarder enabled (below), the
+  # event-driven delta path is the only mechanism fast enough to make the
+  # catalog-dependent flows (catalog-sync spec, the component form's project
+  # picker, etc.) pass — so a green UI suite is itself evidence that
+  # event-driven sync works. If events regress, these flows fall back to the
+  # 600s poll and time out.
   catalogSync:
-    frequency: 60
+    frequency: 600
+
+# Event-driven catalog sync producer. Enabled by default in the chart, but set
+# explicitly here to make the UI suite's dependency on it unmistakable: the
+# forwarder watches OpenChoreo CRs and POSTs change webhooks to Backstage's
+# events endpoint, which drives the near-real-time catalog updates the suite
+# now relies on (periodic sync is parked at 600s above).
+eventForwarder:
+  enabled: true
